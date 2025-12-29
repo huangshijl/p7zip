@@ -29,7 +29,7 @@ jobs:
         ndk-version: r29
         add-to-path: true
 
-    - name: Build 7z.so for Android (${{ matrix.abi }})
+    - name: Build 7z.so (${{ matrix.abi }})
       run: |
         set -e
         cd p7zip
@@ -42,10 +42,6 @@ jobs:
             ;;
           x86_64)
             TARGET=x86_64-linux-android
-            ;;
-          *)
-            echo "Unsupported ABI"
-            exit 1
             ;;
         esac
 
@@ -62,7 +58,7 @@ jobs:
         cd CPP/7zip/Bundles/Format7zF
 
         make -f makefile.gcc clean
-        make -f makefile.gcc -j$(nproc)
+        make -f makefile.gcc DISABLE_ZSTD=1 -j$(nproc)
 
     - name: Collect artifact
       run: |
@@ -75,4 +71,3 @@ jobs:
       with:
         name: 7z-so-android-${{ matrix.abi }}
         path: output/${{ matrix.abi }}/7z.so
-        retention-days: 30
