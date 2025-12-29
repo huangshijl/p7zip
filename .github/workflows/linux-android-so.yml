@@ -1,0 +1,78 @@
+name: Build p7zip (7z.so) for Android JNI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        abi: [arm64-v8a, x86_64]
+
+    steps:
+    - name: Checkout p7zip source
+      uses: actions/checkout@v4
+      with:
+        repository: huangshijl/p7zip
+        ref: master
+        path: p7zip
+
+    - name: Setup Android NDK r29
+      uses: nttld/setup-ndk@v1
+      with:
+        ndk-version: r29
+        add-to-path: true
+
+    - name: Build 7z.so for Android (${{ matrix.abi }})
+      run: |
+        set -e
+        cd p7zip
+
+        API=29
+
+        case "${{ matrix.abi }}" in
+          arm64-v8a)
+            TARGET=aarch64-linux-android
+            ;;
+          x86_64)
+            TARGET=x86_64-linux-android
+            ;;
+          *)
+            echo "Unsupported ABI"
+            exit 1
+            ;;
+        esac
+
+        export CC=${TARGET}${API}-clang
+        export CXX=${TARGET}${API}-clang++
+        export AR=llvm-ar
+        export RANLIB=llvm-ranlib
+        export STRIP=llvm-strip
+
+        export CFLAGS="-O2 -fPIC"
+        export CXXFLAGS="-O2 -fPIC"
+        export LDFLAGS="-fPIC"
+
+        cd CPP/7zip/Bundles/Format7zF
+
+        make -f makefile.gcc clean
+        make -f makefile.gcc -j$(nproc)
+
+    - name: Collect artifact
+      run: |
+        mkdir -p output/${{ matrix.abi }}
+        cp p7zip/CPP/7zip/Bundles/Format7zF/_o/7z.so \
+           output/${{ matrix.abi }}/
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: 7z-so-android-${{ matrix.abi }}
+        path: output/${{ matrix.abi }}/7z.so
+        retention-days: 30
