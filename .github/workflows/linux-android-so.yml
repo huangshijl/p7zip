@@ -1,76 +1,93 @@
-name: Build p7zip for Android (JNI)
+name: Build p7zip for Android
 
 on:
   push:
+    branches: [ "main" ]
+  pull_request:
     branches: [ "main" ]
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     strategy:
       matrix:
-        abi: [arm64-v8a]
+        arch: ["arm64-v8a", "x86_64"]
+        bundle: ["Alone2", "Alone", "Alone7z"]
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+    - name: Checkout p7zip source
+      uses: actions/checkout@v3
+      with:
+        repository: huangshijl/p7zip
+        ref: master
+        path: p7zip
+        fetch-depth: 0  # Ensure full repo is checked out
 
-      # 1️⃣ 安装 JDK（NDK 需要）
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 17
+    - name: Set up Android NDK
+      uses: nttld/setup-ndk@v1
+      id: setup-ndk
+      with:
+        ndk-version: r29
+        add-to-path: true
 
-      # 2️⃣ 安装 Android SDK + NDK（官方，稳定）
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+    - name: Export NDK path
+      run: |
+        export NDK=$ANDROID_NDK_HOME
+        echo "NDK Path: $NDK"
 
-      - name: Install NDK r27c
-        run: |
-          sdkmanager "ndk;27.2.12479018"
-          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.2.12479018" >> $GITHUB_ENV
-          echo "$ANDROID_SDK_ROOT/ndk/27.2.12479018" >> $GITHUB_PATH
+    - name: List files for debugging
+      run: |
+        echo "Current directory:"
+        pwd
+        echo "Listing contents of p7zip folder:"
+        ls -la p7zip
 
-      # 3️⃣ 设置编译环境
-      - name: Set build env
-        run: |
-          echo "API=21" >> $GITHUB_ENV
-          echo "ABI=${{ matrix.abi }}" >> $GITHUB_ENV
+    - name: Build p7zip-${{ matrix.bundle }} for ${{ matrix.arch }}
+      run: |
+        cd $GITHUB_WORKSPACE/p7zip
+        case ${{ matrix.arch }} in
+          arm64-v8a)
+            TARGET_TRIPLE=aarch64-linux-android29
+            ;;
+          x86_64)
+            TARGET_TRIPLE=x86_64-linux-android29
+            ;;
+        esac
+        export CC=${TARGET_TRIPLE}-clang
+        export CXX=${TARGET_TRIPLE}-clang++
+        export LD=${TARGET_TRIPLE}-ld
+        export CFLAGS="--target=${TARGET_TRIPLE} -fPIC -O2"
+        export CXXFLAGS="--target=${TARGET_TRIPLE} -fPIC -O2"
+        export LDFLAGS="--target=${TARGET_TRIPLE} -fPIC"
+        
+        MAKEFILE_PATH="CPP/7zip/Bundles/${{ matrix.bundle }}/makefile.gcc"
+        if [ ! -f "$MAKEFILE_PATH" ]; then
+          echo "Error: makefile.gcc not found at $MAKEFILE_PATH"
+          ls -la CPP/7zip/Bundles/${{ matrix.bundle }}/
+          exit 1
+        fi
+        
+        cd $(dirname "$MAKEFILE_PATH")
+        make -f makefile.gcc clean
+        make -f makefile.gcc -j$(nproc)
 
-      # 4️⃣ 编译 p7zip (7zz)
-      - name: Build 7zz (static)
-        run: |
-          export NDK=$ANDROID_NDK_HOME
-          export TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
+    - name: Create output directory
+      run: mkdir -p $GITHUB_WORKSPACE/output/${{ matrix.arch }}-${{ matrix.bundle }}
 
-          export CC=$TOOLCHAIN/bin/aarch64-linux-android${API}-clang
-          export CXX=$TOOLCHAIN/bin/aarch64-linux-android${API}-clang++
-          export AR=$TOOLCHAIN/bin/llvm-ar
-          export RANLIB=$TOOLCHAIN/bin/llvm-ranlib
-          export STRIP=$TOOLCHAIN/bin/llvm-strip
+    - name: Extract compiled binaries/libraries
+      run: |
+        OUTPUT_DIR="$GITHUB_WORKSPACE/p7zip/CPP/7zip/Bundles/${{ matrix.bundle }}/_o"
+        if [ ! -d "$OUTPUT_DIR" ]; then
+          echo "Error: Compiled output directory $_o not found"
+          ls -la $GITHUB_WORKSPACE/p7zip/CPP/7zip/Bundles/${{ matrix.bundle }}/
+          exit 1
+        fi
+        cp -r $OUTPUT_DIR/* $GITHUB_WORKSPACE/output/${{ matrix.arch }}-${{ matrix.bundle }}/
 
-          cd p7zip/CPP/7zip/Bundles/Alone7z
-
-          make -f makefile.gcc \
-            CC="$CC" \
-            CXX="$CXX" \
-            AR="$AR" \
-            RANLIB="$RANLIB" \
-            STRIP="$STRIP" \
-            -j$(nproc)
-
-      # 5️⃣ 收集产物
-      - name: Collect artifacts
-        run: |
-          mkdir -p out/${{ matrix.abi }}
-          cp p7zip/CPP/7zip/Bundles/Alone7z/7zz out/${{ matrix.abi }}/
-
-      # 6️⃣ 上传
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: 7zz-${{ matrix.abi }}
-          path: out/${{ matrix.abi }}/7zz
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: p7zip-android-${{ matrix.arch }}-${{ matrix.bundle }}
+        path: $GITHUB_WORKSPACE/output/${{ matrix.arch }}-${{ matrix.bundle }}/
+        retention-days: 30
