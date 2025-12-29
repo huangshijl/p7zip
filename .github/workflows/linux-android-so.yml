@@ -91,7 +91,7 @@ jobs:
         export CFLAGS="--target=${TARGET_TRIPLE} -fPIC -O2"
         export CXXFLAGS="--target=${TARGET_TRIPLE} -fPIC -O2"
         export LDFLAGS="--target=${TARGET_TRIPLE} -fPIC"
-
+        
         # Locate the makefile
         MAKEFILE_PATH="CPP/7zip/Bundles/${{ matrix.bundle }}/makefile.gcc"
         if [ ! -f "$MAKEFILE_PATH" ]; then
