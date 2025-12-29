@@ -35,60 +35,99 @@ jobs:
         curl -fsSL $NDK_URL -o $NDK_DIR/ndk.zip
         unzip -q $NDK_DIR/ndk.zip -d $NDK_DIR
         export ANDROID_NDK_HOME="$NDK_DIR/android-ndk-${NDK_VERSION}"
-        echo "NDK_HOME=$ANDROID_NDK_HOME" >> $GITHUB_ENV
-        
-        # ✅ 关键：将工具链加入PATH
+        echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME" >> $GITHUB_ENV
         echo "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
 
     - name: Install essential build tools
-      run: sudo apt-get update && sudo apt-get install -y make gcc  # ✅ 仅保留基础工具
+      run: sudo apt-get update && sudo apt-get install -y make gcc patchelf
 
-    - name: Build p7zip
+    - name: Configure build environment
       run: |
         cd $GITHUB_WORKSPACE/p7zip
         
-        # ✅ 正确设置交叉编译环境
+        # Set architecture-specific variables
         case "${{ matrix.arch }}" in
           arm64-v8a)
             TARGET_TRIPLE=aarch64-linux-android29
+            ARCH_DEF="-D__ARM_ARCH_8A__"
             ;;
         esac
         
-        # ✅ 修复编译/链接标志
+        # Export compiler and flags
         export CC=clang
         export CXX=clang++
-        export CFLAGS="--target=${TARGET_TRIPLE} -fPIC -O2 -D__ANDROID__"
-        export CXXFLAGS="--target=${TARGET_TRIPLE} -fPIC -O2 -D__ANDROID__"
-        export LDFLAGS="--target=${TARGET_TRIPLE}"  # ✅ 移除无效的-fPIC
+        export CFLAGS="--target=${TARGET_TRIPLE} -fPIC -O2 -D__ANDROID__ ${ARCH_DEF} -Wno-unused-command-line-argument"
+        export CXXFLAGS="--target=${TARGET_TRIPLE} -fPIC -O2 -D__ANDROID__ ${ARCH_DEF} -Wno-unused-command-line-argument"
+        export LDFLAGS="--target=${TARGET_TRIPLE} -fPIC"
         
-        # ✅ 修复常见编译警告
-        export COMMON_FLAGS="-Wno-unused-command-line-argument"
+        # Special flags for zstd to disable architecture-specific assembly
+        export ZSTD_CFLAGS="${CFLAGS} -DZSTD_DISABLE_ASM"
         
-        MAKEFILE_DIR="CPP/7zip/Bundles/${{ matrix.bundle }}"
-        cd $MAKEFILE_DIR
+        # Fix for LZ4 symbol issues
+        export LZ4_CFLAGS="${CFLAGS} -DLZ4_DISABLE_DEPRECATE_WARNINGS"
         
-        # ✅ 清理并构建
+        # Save environment for later steps
+        echo "TARGET_TRIPLE=${TARGET_TRIPLE}" >> $GITHUB_ENV
+        echo "ARCH_DEF=${ARCH_DEF}" >> $GITHUB_ENV
+
+    - name: Build p7zip with architecture-specific fixes
+      run: |
+        cd $GITHUB_WORKSPACE/p7zip/CPP/7zip/Bundles/${{ matrix.bundle }}
+        
+        # 1. 修改zstd CMake配置，禁用架构特定汇编
+        if [ -f "../../../../../C/zstd/CMakeLists.txt" ]; then
+          sed -i 's/add_subdirectory(lib\/decompress)/# add_subdirectory(lib\/decompress)/g' ../../../../../C/zstd/CMakeLists.txt
+          echo "message(STATUS \"Skipping architecture-specific decompress assembly\")" >> ../../../../../C/zstd/CMakeLists.txt
+        fi
+        
+        # 2. 修复LZ4版本脚本问题
+        if [ -f "../../../../../C/lz4/build/cmake/lz4.pc.cmake.in" ]; then
+          sed -i 's/set(LZ4_PC_LIBS_PRIVATE.*/set(LZ4_PC_LIBS_PRIVATE "")/' ../../../../../C/lz4/build/cmake/lz4.pc.cmake.in
+        fi
+        
+        # 3. 修改Makefile以传递正确的架构标志
+        sed -i "s/CFLAGS_LOCAL =/CFLAGS_LOCAL = ${{ env.CFLAGS }}/" makefile.gcc
+        sed -i "s/CXXFLAGS_LOCAL =/CXXFLAGS_LOCAL = ${{ env.CXXFLAGS }}/" makefile.gcc
+        
+        # 4. 构建前清理
         make -f makefile.gcc clean
+        
+        # 5. 详细模式构建
         make -f makefile.gcc \
           CC=$CC \
           CXX=$CXX \
-          CFLAGS="$CFLAGS $COMMON_FLAGS" \
-          CXXFLAGS="$CXXFLAGS $COMMON_FLAGS" \
-          LDFLAGS="$LDFLAGS" \
+          CFLAGS="${{ env.CFLAGS }}" \
+          CXXFLAGS="${{ env.CXXFLAGS }}" \
+          LDFLAGS="${{ env.LDFLAGS }}" \
           -j$(nproc) \
-          VERBOSE=1  # ✅ 启用详细日志
+          VERBOSE=1
 
-    - name: Package artifacts
+    - name: Create output directory
+      run: mkdir -p $GITHUB_WORKSPACE/output/${{ matrix.arch }}-${{ matrix.bundle }}
+
+    - name: Extract compiled binaries/libraries
       run: |
         OUTPUT_DIR="$GITHUB_WORKSPACE/p7zip/CPP/7zip/Bundles/${{ matrix.bundle }}/_o"
-        ARTIFACT_DIR="$GITHUB_WORKSPACE/output/${{ matrix.arch }}-${{ matrix.bundle }}"
-        mkdir -p $ARTIFACT_DIR
-        cp $OUTPUT_DIR/* $ARTIFACT_DIR/ 2>/dev/null || :  # 忽略错误继续
-        ls -la $ARTIFACT_DIR
+        if [ ! -d "$OUTPUT_DIR" ]; then
+          echo "Error: Output directory not found!"
+          exit 1
+        fi
+        
+        # 复制可执行文件
+        if [ -f "$OUTPUT_DIR/7za" ]; then
+          cp $OUTPUT_DIR/7za $GITHUB_WORKSPACE/output/${{ matrix.arch }}-${{ matrix.bundle }}/
+        fi
+        
+        # 复制共享库（如果存在）
+        mkdir -p $GITHUB_WORKSPACE/output/${{ matrix.arch }}-${{ matrix.bundle }}/lib
+        find $OUTPUT_DIR -name "*.so*" -exec cp {} $GITHUB_WORKSPACE/output/${{ matrix.arch }}-${{ matrix.bundle }}/lib/ \; 2>/dev/null || true
+        
+        # 验证输出
+        ls -la $GITHUB_WORKSPACE/output/${{ matrix.arch }}-${{ matrix.bundle }}
 
-    - name: Upload artifacts
+    - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
         name: p7zip-android-${{ matrix.arch }}-${{ matrix.bundle }}
-        path: ${{ github.workspace }}/output/
+        path: ${{ github.workspace }}/output/${{ matrix.arch }}-${{ matrix.bundle }}
         retention-days: 30
