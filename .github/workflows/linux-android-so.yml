@@ -1,9 +1,7 @@
-name: Build p7zip (7z.so) for Android JNI
+name: Build p7zip for Android (JNI)
 
 on:
   push:
-    branches: [ "main" ]
-  pull_request:
     branches: [ "main" ]
   workflow_dispatch:
 
@@ -13,61 +11,66 @@ jobs:
 
     strategy:
       matrix:
-        abi: [arm64-v8a, x86_64]
+        abi: [arm64-v8a]
 
     steps:
-    - name: Checkout p7zip source
-      uses: actions/checkout@v4
-      with:
-        repository: huangshijl/p7zip
-        ref: master
-        path: p7zip
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Setup Android NDK r29
-      uses: nttld/setup-ndk@v1
-      with:
-        ndk-version: r29
-        add-to-path: true
+      # 1️⃣ 安装 JDK（NDK 需要）
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
 
-    - name: Build 7z.so (${{ matrix.abi }})
-      run: |
-        set -e
-        cd p7zip
+      # 2️⃣ 安装 Android SDK + NDK（官方，稳定）
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
 
-        API=29
+      - name: Install NDK r27c
+        run: |
+          sdkmanager "ndk;27.2.12479018"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.2.12479018" >> $GITHUB_ENV
+          echo "$ANDROID_SDK_ROOT/ndk/27.2.12479018" >> $GITHUB_PATH
 
-        case "${{ matrix.abi }}" in
-          arm64-v8a)
-            TARGET=aarch64-linux-android
-            ;;
-          x86_64)
-            TARGET=x86_64-linux-android
-            ;;
-        esac
+      # 3️⃣ 设置编译环境
+      - name: Set build env
+        run: |
+          echo "API=21" >> $GITHUB_ENV
+          echo "ABI=${{ matrix.abi }}" >> $GITHUB_ENV
 
-        export CC=${TARGET}${API}-clang
-        export CXX=${TARGET}${API}-clang++
-        export AR=llvm-ar
-        export RANLIB=llvm-ranlib
-        export STRIP=llvm-strip
+      # 4️⃣ 编译 p7zip (7zz)
+      - name: Build 7zz (static)
+        run: |
+          export NDK=$ANDROID_NDK_HOME
+          export TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
 
-        export CFLAGS="-O2 -fPIC"
-        export CXXFLAGS="-O2 -fPIC"
-        export LDFLAGS="-fPIC"
+          export CC=$TOOLCHAIN/bin/aarch64-linux-android${API}-clang
+          export CXX=$TOOLCHAIN/bin/aarch64-linux-android${API}-clang++
+          export AR=$TOOLCHAIN/bin/llvm-ar
+          export RANLIB=$TOOLCHAIN/bin/llvm-ranlib
+          export STRIP=$TOOLCHAIN/bin/llvm-strip
 
-        cd CPP/7zip/Bundles/Format7zF
+          cd p7zip/CPP/7zip/Bundles/Alone7z
 
-        make -f makefile.gcc clean
-        make -f makefile.gcc DISABLE_ZSTD=1 -j$(nproc)
+          make -f makefile.gcc \
+            CC="$CC" \
+            CXX="$CXX" \
+            AR="$AR" \
+            RANLIB="$RANLIB" \
+            STRIP="$STRIP" \
+            -j$(nproc)
 
-    - name: Collect artifact
-      run: |
-        mkdir -p output/${{ matrix.abi }}
-        cp p7zip/CPP/7zip/Bundles/Format7zF/_o/7z.so \
-           output/${{ matrix.abi }}/
+      # 5️⃣ 收集产物
+      - name: Collect artifacts
+        run: |
+          mkdir -p out/${{ matrix.abi }}
+          cp p7zip/CPP/7zip/Bundles/Alone7z/7zz out/${{ matrix.abi }}/
 
-    - name: Upload artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: 7z-so-android-${{ matrix.abi }}
-        path: output/${{ matrix.abi }}/7z.so
+      # 6️⃣ 上传
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: 7zz-${{ matrix.abi }}
+          path: out/${{ matrix.abi }}/7zz
