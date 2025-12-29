@@ -16,6 +16,20 @@ jobs:
         bundle: ["Alone2", "Alone", "Alone7z"]
 
     steps:
+    - name: Install LZ4
+      run: |
+        git clone --recursive https://github.com/lz4/lz4.git
+        cd lz4
+        make
+        sudo make install
+
+    - name: Install Zstandard
+      run: |
+        git clone --recursive https://github.com/facebook/zstd.git
+        cd zstd
+        make
+        sudo make install
+        
     - name: Checkout p7zip source
       uses: actions/checkout@v3
       with:
