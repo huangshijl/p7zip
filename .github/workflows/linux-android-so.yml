@@ -73,6 +73,17 @@ jobs:
         echo "Listing contents of p7zip folder:"
         ls -la p7zip
 
+    - name: Patch Makefile for static library handling (Fix Brotli library issue)
+      run: |
+        # Modify Makefile to use static libraries instead of shared libraries
+        sed -i 's/cp brotli_build\/libbrotlicommon.so\*/cp brotli_build\/libbrotlicommon.a/g' $GITHUB_WORKSPACE/p7zip/CPP/7zip/Bundles/${{ matrix.bundle }}/7zip_gcc.mak
+        sed -i 's/cp brotli_build\/libbrotlidec.so\*/cp brotli_build\/libbrotlidec.a/g' $GITHUB_WORKSPACE/p7zip/CPP/7zip/Bundles/${{ matrix.bundle }}/7zip_gcc.mak
+        sed -i 's/cp brotli_build\/libbrotlienc.so\*/cp brotli_build\/libbrotlienc.a/g' $GITHUB_WORKSPACE/p7zip/CPP/7zip/Bundles/${{ matrix.bundle }}/7zip_gcc.mak
+        # Update linking to use static libraries
+        sed -i 's/-lbrotlicommon/-lbrotlicommon.a/g' $GITHUB_WORKSPACE/p7zip/CPP/7zip/Bundles/${{ matrix.bundle }}/7zip_gcc.mak
+        sed -i 's/-lbrotlidec/-lbrotlidec.a/g' $GITHUB_WORKSPACE/p7zip/CPP/7zip/Bundles/${{ matrix.bundle }}/7zip_gcc.mak
+        sed -i 's/-lbrotlienc/-lbrotlienc.a/g' $GITHUB_WORKSPACE/p7zip/CPP/7zip/Bundles/${{ matrix.bundle }}/7zip_gcc.mak
+
     - name: Build p7zip-${{ matrix.bundle }} for ${{ matrix.arch }}
       run: |
         cd $GITHUB_WORKSPACE/p7zip
